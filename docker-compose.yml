@@ -1,0 +1,61 @@
+x-app: &app
+  build: .
+  environment: &env
+    INVICTUS_DATABASE_URL: postgresql+psycopg://invictus:invictus@postgres:5432/invictus
+    INVICTUS_REDIS_URL: redis://redis:6379/0
+    INVICTUS_API_KEYS: ${INVICTUS_API_KEYS:-dev-key:demo}
+    INVICTUS_LLM_PROVIDER: ${INVICTUS_LLM_PROVIDER:-fake}
+    INVICTUS_LLM_MODEL: ${INVICTUS_LLM_MODEL:-claude-opus-5-5}
+    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  depends_on:
+    postgres: { condition: service_healthy }
+    redis: { condition: service_healthy }
+  restart: unless-stopped
+
+services:
+  api:
+    <<: *app
+    ports: ["8000:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')"]
+      interval: 5s
+      retries: 10
+
+  dispatcher:
+    <<: *app
+    command: ["python", "-m", "invictus.dispatcher"]
+
+  worker:
+    <<: *app
+    command: ["python", "-m", "invictus.worker"]
+    environment:
+      <<: *env
+      INVICTUS_WORKER_CONCURRENCY: "4"
+    deploy:
+      replicas: 2
+    stop_grace_period: 60s   # SIGTERM: finish in-flight runs, take no new ones
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: invictus
+      POSTGRES_PASSWORD: invictus
+      POSTGRES_DB: invictus
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U invictus"]
+      interval: 2s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: ["redisdata:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      retries: 20
+
+volumes:
+  pgdata:
+  redisdata:
